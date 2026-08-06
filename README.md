@@ -231,7 +231,11 @@ npm run build
 
 ## Windows 开源版本
 
-Windows 版本可以直接从本仓库复刻构建。它使用本机安装并登录的 Codex CLI，仓库不包含任何模型密钥或登录凭据。
+### 普通用户直接下载
+
+[下载 Windows 安装包（Windows 10/11 x64）](https://github.com/wuyanji5566/jarvis-codex/releases/download/v0.2.0-windows/Jarvis-Codex-Windows-Setup.exe)
+
+普通用户不需要安装 Node.js、Rust 或 Visual Studio。下载后运行安装程序即可。首次运行前，请在本机安装并登录官方 Codex CLI：Windows 版本可以直接从本仓库复刻构建。它使用本机安装并登录的 Codex CLI，仓库不包含任何模型密钥或登录凭据。
 
 开发和打包前请准备 Node.js 20+、Rust stable MSVC、Visual Studio Build Tools（勾选“使用 C++ 的桌面开发”）、.NET 8 SDK 和 WebView2，然后在 PowerShell 中运行：
 
