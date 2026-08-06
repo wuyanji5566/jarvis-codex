@@ -1,3 +1,8 @@
+#![cfg_attr(
+    target_os = "windows",
+    allow(dead_code, unreachable_code, unused_variables)
+)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -17,6 +22,8 @@ use tokio::{
     sync::{oneshot, Mutex, RwLock},
     time::{timeout, Duration},
 };
+
+mod platform;
 
 struct AppState {
     runtime: Mutex<Option<Arc<CodexRuntime>>>,
@@ -76,7 +83,7 @@ async fn request_microphone_permission() -> Result<String, String> {
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
 async fn request_microphone_permission() -> Result<String, String> {
-    Ok("authorized".to_owned())
+    platform::request_microphone_permission().await
 }
 
 struct CodexRuntime {
@@ -191,11 +198,9 @@ impl CodexRuntime {
         permission_mode: PermissionMode,
         workspace: String,
     ) -> Result<Arc<Self>, String> {
-        let codex_binary = codex_binary_path(&app)?;
-        let mut child = Command::new(&codex_binary)
+        let mut child = platform::codex_command(&app)?
             // Realtime is an experimental app-server surface. Enable it only
             // for this isolated Jarvis child; never mutate ~/.codex/config.toml.
-            .args(["app-server", "--enable", "realtime_conversation", "--stdio"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -340,6 +345,7 @@ impl CodexRuntime {
     }
 }
 
+#[allow(dead_code)]
 fn codex_binary_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(configured) = std::env::var("JARVIS_CODEX_BIN") {
         let path = PathBuf::from(configured);
@@ -442,6 +448,97 @@ async fn wake_status_value(state: &AppState) -> WakeStatus {
 }
 
 fn start_wake_supervisor(app: AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        let state = app.state::<AppState>();
+        if state.wake_supervisor_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        state.wake_enabled.store(true, Ordering::SeqCst);
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let mut woke = false;
+            for _attempt in 0..3 {
+                if !state.wake_enabled.load(Ordering::SeqCst) {
+                    break;
+                }
+                let event_file =
+                    std::env::temp_dir().join(format!("jarvis-wake-{}.jsonl", std::process::id()));
+                let _ = fs::write(&event_file, "");
+                let mut child = match platform::spawn_wake_helper(&app, &event_file).await {
+                    Ok(child) => child,
+                    Err(error) => {
+                        *state.wake_authorization.write().await = "manual-only".to_owned();
+                        let _ = app.emit("codex-diagnostic", error);
+                        break;
+                    }
+                };
+                state
+                    .wake_pid
+                    .store(child.id().unwrap_or(0), Ordering::SeqCst);
+                *state.wake_authorization.write().await = "authorized".to_owned();
+                let mut processed = 0usize;
+                loop {
+                    let content = fs::read_to_string(&event_file).unwrap_or_default();
+                    let lines: Vec<&str> = content.lines().collect();
+                    for line in lines.iter().skip(processed) {
+                        let Ok(message) = serde_json::from_str::<Value>(line) else {
+                            continue;
+                        };
+                        match message.get("type").and_then(Value::as_str) {
+                            Some("authorization") => {
+                                *state.wake_authorization.write().await = message
+                                    .get("status")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("unknown")
+                                    .to_owned();
+                            }
+                            Some("ready") => {
+                                state.wake_ready.store(true, Ordering::SeqCst);
+                            }
+                            Some("wake") => {
+                                woke = true;
+                                state.wake_enabled.store(false, Ordering::SeqCst);
+                                state.wake_ready.store(false, Ordering::SeqCst);
+                                raise_jarvis_window(&app);
+                            }
+                            Some("error") => {
+                                *state.wake_authorization.write().await = "manual-only".to_owned();
+                            }
+                            _ => {}
+                        }
+                        let _ = app.emit("jarvis-wake-status", wake_status_value(&state).await);
+                        if woke {
+                            break;
+                        }
+                    }
+                    processed = lines.len();
+                    if woke || !state.wake_enabled.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if child.try_wait().ok().flatten().is_some() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                }
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                let _ = fs::remove_file(&event_file);
+                state.wake_pid.store(0, Ordering::SeqCst);
+                if woke || !state.wake_enabled.load(Ordering::SeqCst) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            state.wake_ready.store(false, Ordering::SeqCst);
+            state.wake_supervisor_running.store(false, Ordering::SeqCst);
+            if woke {
+                let _ = app.emit("jarvis-wake", json!({"ok": true}));
+            }
+            let _ = app.emit("jarvis-wake-status", wake_status_value(&state).await);
+        });
+        return;
+    }
     let state = app.state::<AppState>();
     if state.wake_supervisor_running.swap(true, Ordering::SeqCst) {
         return;
@@ -603,6 +700,16 @@ async fn arm_wake_listener(app: AppHandle) -> Result<WakeStatus, String> {
 #[tauri::command]
 async fn disarm_wake_listener(app: AppHandle) -> Result<WakeStatus, String> {
     let state = app.state::<AppState>();
+    #[cfg(target_os = "windows")]
+    {
+        state.wake_enabled.store(false, Ordering::SeqCst);
+        state.wake_ready.store(false, Ordering::SeqCst);
+        let pid = state.wake_pid.swap(0, Ordering::SeqCst);
+        platform::terminate_process(pid).await;
+        *state.wake_authorization.write().await = "manual-only".to_owned();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        return Ok(wake_status_value(&state).await);
+    }
     state.wake_enabled.store(false, Ordering::SeqCst);
     state.wake_ready.store(false, Ordering::SeqCst);
     let pid = state.wake_pid.swap(0, Ordering::SeqCst);
@@ -637,6 +744,11 @@ async fn wake_listener_status(app: AppHandle) -> WakeStatus {
 
 #[tauri::command]
 async fn consume_cold_wake(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        state.cold_wake_pending.store(false, Ordering::SeqCst);
+        return Ok(false);
+    }
     if !state.cold_wake_pending.swap(false, Ordering::SeqCst) {
         return Ok(false);
     }
@@ -669,6 +781,10 @@ async fn consume_cold_wake(app: AppHandle, state: State<'_, AppState>) -> Result
 
 #[tauri::command]
 fn default_workspace() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        return platform::default_workspace();
+    }
     if let Ok(configured) = std::env::var("JARVIS_WORKSPACE") {
         let path = PathBuf::from(configured);
         if path.is_dir() {
@@ -690,6 +806,10 @@ fn default_workspace() -> Result<String, String> {
 }
 
 fn validated_workspace(cwd: &str) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        return platform::validated_workspace(cwd);
+    }
     let path = PathBuf::from(cwd);
     if !path.is_dir() {
         return Err(format!("工作目录不存在或不是文件夹：{cwd}"));
@@ -811,7 +931,9 @@ async fn start_codex_voice(
         "threadId": thread_id,
         "outputModality": "audio",
         "version": "v3",
-        "includeStartupContext": true,
+        // The thread is already attached to this runtime. Replaying the full
+        // startup context on every voice handshake adds latency as history grows.
+        "includeStartupContext": false,
         "clientManagedHandoffs": false,
         // STOP must be final. Flushing the tail can create a new Codex turn
         // after the user has already stopped the session.
@@ -887,6 +1009,28 @@ async fn send_text(state: State<'_, AppState>, text: String) -> Result<(), Strin
         )
         .await?;
     Ok(())
+}
+
+fn validated_browser_target(value: Option<String>) -> Result<String, String> {
+    let target = value
+        .unwrap_or_else(|| "about:blank".to_owned())
+        .trim()
+        .to_owned();
+    if target == "about:blank" || target.starts_with("https://") || target.starts_with("http://") {
+        if target.chars().any(|character| {
+            character.is_control() || matches!(character, '"' | '\'' | '&' | '|' | '<' | '>' | '^')
+        }) {
+            return Err("浏览器地址包含不安全字符".to_owned());
+        }
+        return Ok(target);
+    }
+    Err("浏览器地址必须以 http:// 或 https:// 开头".to_owned())
+}
+
+#[tauri::command]
+async fn open_browser(url: Option<String>) -> Result<(), String> {
+    let target = validated_browser_target(url)?;
+    platform::open_browser(&target).await
 }
 
 #[tauri::command]
@@ -980,6 +1124,7 @@ pub fn run() {
             stop_codex_voice,
             append_codex_voice_text,
             send_text,
+            open_browser,
             stop_all,
             resolve_server_request,
             shutdown

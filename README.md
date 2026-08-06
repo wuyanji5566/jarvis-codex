@@ -228,3 +228,22 @@ npm run build
 
 架构和信任边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，安全问题报告方式
 见 [SECURITY.md](SECURITY.md)。
+
+## Windows 开源版本
+
+Windows 版本可以直接从本仓库复刻构建。它使用本机安装并登录的 Codex CLI，仓库不包含任何模型密钥或登录凭据。
+
+开发和打包前请准备 Node.js 20+、Rust stable MSVC、Visual Studio Build Tools（勾选“使用 C++ 的桌面开发”）、.NET 8 SDK 和 WebView2，然后在 PowerShell 中运行：
+
+```powershell
+git clone https://github.com/wuyanji5566/jarvis-codex.git
+cd jarvis-codex
+npm ci
+codex login
+npm run check
+npm run build:windows
+```
+
+安装包会生成在 `src-tauri\\target\\release\\bundle\\nsis\\`。首次运行时，每位使用者都需要使用自己的 Codex 登录状态；语音、模型能力和额度由其自己的 Codex 账户决定。
+
+更完整的 Windows 说明见 [Windows 开发与打包](docs/WINDOWS_DEVELOPMENT.md)。

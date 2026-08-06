@@ -91,3 +91,5 @@ dialog{z-index:50}
 @keyframes completion-flash{0%{opacity:0;transform:scale(.7)}28%{opacity:.86;transform:scale(1.08)}58%{opacity:.16;transform:scale(1.26)}100%{opacity:0;transform:scale(1.42)}}
 
 @media(max-width:1050px){.character-rig{width:min(58vw,560px);height:min(84vh,700px)}.mic{left:24px;top:auto;bottom:24px}.stop{right:24px;top:auto;bottom:24px}.icon-button{left:auto;right:24px;top:24px}.command{bottom:28px;width:min(46vw,430px)}}
+
+/* The original Jack avatar is the canonical visual asset. */

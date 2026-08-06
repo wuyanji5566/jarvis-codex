@@ -1,0 +1,59 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run JavaScript tests
+        run: npm test
+
+      - name: Build web frontend
+        run: npm run web:build
+
+      - name: Build Windows wake helper
+        run: npm run wake:build
+
+      - name: Check Rust and Clippy
+        run: npm run check:rust
+
+      - name: Build Windows NSIS installer
+        run: npm run build:windows
+
+      - name: Upload NSIS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-codex-windows-nsis
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

@@ -62,6 +62,9 @@ let assistantTranscriptBuffer = "";
 let agentMessageBuffer = "";
 let voiceStartInFlight = false;
 let recoverableColdStartError = false;
+const MAX_VOICE_RECONNECTS = 2;
+let voiceReconnectAttempts = 0;
+let voiceReconnectTimer: number | undefined;
 const voiceAudio = new Audio();
 voiceAudio.autoplay = true;
 const previewParams = new URLSearchParams(window.location.search);
@@ -87,7 +90,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
 <main class="shell" data-mode="booting">
   <canvas id="particle-field" width="1440" height="900" aria-hidden="true"></canvas>
   <header class="topbar hud-panel">
-    <div class="brand"><i></i><strong>JARVIS</strong><span></span><em>CODEX VOICE SYSTEM</em></div>
+    <div class="brand"><i></i><strong>杰克</strong><span></span><em>CODEX VOICE SYSTEM</em></div>
     <div class="status"><i></i><b id="mode-label">INITIALIZING</b></div>
     <button id="settings" class="icon-button" aria-label="设置">⌘</button>
   </header>
@@ -97,13 +100,13 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <div class="character-rig">
         <div class="assembly-orbits" aria-hidden="true"><i></i><i></i><i></i></div>
         <div class="armor-shards" aria-hidden="true"></div>
-        <img id="jarvis-character" class="helmet-character" src="/assets/jarvis-character-v2.png" alt="Jarvis holographic helmet">
+        <img id="jarvis-character" class="helmet-character" src="/assets/jarvis-character-v2.png" alt="杰克全息核心">
         <div class="helmet-scan"></div>
         <div class="assembly-flash" aria-hidden="true"></div>
       </div>
       <canvas id="wave" width="900" height="120"></canvas>
     </div>
-    <div class="identity"><span>JARVIS CORE</span><b id="identity-state">SYSTEM BOOT</b></div>
+    <div class="identity"><span>JACK CORE</span><b id="identity-state">SYSTEM BOOT</b></div>
   </section>
   <aside class="workers">
     <article class="worker active" data-role="orchestrator"><span>›_</span><div><b>Codex</b><small>Connecting</small></div><i></i></article>
@@ -112,8 +115,8 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <article class="worker" data-role="reviewer"><span>✓</span><div><b>Reviewer</b><small>Standby</small></div><i></i></article>
   </aside>
   <section class="dialogue hud-panel">
-    <b>YOU</b><p id="user-transcript">“嗨，Jarvis”</p>
-    <b class="jarvis">JARVIS</b><p id="assistant-transcript">正在连接 Codex 原生任务线程…</p>
+    <b>YOU</b><p id="user-transcript">“嘿，杰克”</p>
+    <b class="jarvis">杰克</b><p id="assistant-transcript">正在连接 Codex 原生任务线程…</p>
   </section>
   <footer class="controls">
     <button id="mic" class="control mic"><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="8.25" y="3" width="7.5" height="11.5" rx="3.75"></rect><path d="M5.5 11.25v.75a6.5 6.5 0 0 0 13 0v-.75M12 18.5V22M8.75 22h6.5"></path></svg></span><b>CODEX VOICE</b><small>V3 WEBRTC · DIRECT</small></button>
@@ -133,6 +136,8 @@ const banner = $("#degraded-banner") as HTMLDivElement;
 const mic = $("#mic") as HTMLButtonElement;
 const approval = $("#approval") as HTMLDialogElement;
 const settings = $("#settings-dialog") as HTMLDialogElement;
+settings.querySelector("h2")!.textContent = "杰克 SYSTEM";
+settings.querySelector("dt")!.nextElementSibling!.textContent = "嘿，杰克";
 const characterRig = $<HTMLElement>(".character-rig");
 const hoverControls = $<HTMLElement>(".controls");
 const settingsButton = $<HTMLButtonElement>("#settings");
@@ -161,6 +166,26 @@ function triggerCharacterAction(action: CharacterAction, duration = 1100) {
   characterActionTimer = window.setTimeout(() => shell.classList.remove(`action-${action}`), duration);
 }
 
+function quickBrowserTarget(text: string): string | null {
+  if (!/(打开|启动|进入).*(浏览器|chrome|谷歌|edge|微软浏览器)/iu.test(text)) return null;
+  const explicitUrl = text.match(/https?:\/\/[^\s，。；！？]+/iu)?.[0];
+  if (explicitUrl) return explicitUrl;
+  if (/百度/iu.test(text)) return "https://www.baidu.com";
+  if (/必应|bing/iu.test(text)) return "https://www.bing.com";
+  return "about:blank";
+}
+
+async function runQuickBrowserCommand(text: string): Promise<boolean> {
+  if (!currentWindow) return false;
+  const url = quickBrowserTarget(text);
+  if (!url) return false;
+  await invoke("open_browser", { url });
+  response.textContent = url === "about:blank" ? "正在打开默认浏览器。" : `正在打开 ${url}`;
+  setMode("ready");
+  setWorker("orchestrator", "Browser opened");
+  return true;
+}
+
 for (const area of [characterRig, hoverControls, settingsButton]) {
   area.addEventListener("pointerenter", revealControls);
   area.addEventListener("pointerleave", scheduleControlsHide);
@@ -174,7 +199,7 @@ let approvalId: number | string | undefined;
 const copy: Record<Mode, [string, string]> = {
   booting: ["INITIALIZING", "SYSTEM BOOT"], ready: ["READY", "CODEX VOICE STANDBY"],
   "voice-starting": ["VOICE LINKING", "OPENING CODEX VOICE"], listening: ["LISTENING", "OFFICIAL VOICE ONLINE"],
-  working: ["CODEX WORKING", "TASK EXECUTION"], speaking: ["JARVIS SPEAKING", "VOICE OUTPUT"],
+  working: ["CODEX WORKING", "TASK EXECUTION"], speaking: ["JACK SPEAKING", "VOICE OUTPUT"],
   degraded: ["PERMISSION NEEDED", "WAKE SYSTEM OFFLINE"], stopped: ["INTERRUPTED", "ALL SYSTEMS HALTED"],
 };
 
@@ -533,7 +558,7 @@ async function handle(message: Message) {
     setMode("listening");
     triggerCharacterAction("acknowledge");
     setWorker("orchestrator", "Official Voice online");
-    response.textContent = "Codex 官方 Voice 已上线。你现在可以直接和 Jarvis 对话。";
+    response.textContent = "Codex 官方 Voice 已上线。你现在可以直接和杰克对话。";
   } else if (method === "thread/realtime/transcript/delta") {
     const delta = typeof params?.delta === "string" ? params.delta : "";
     if (params?.role === "assistant") {
@@ -555,6 +580,10 @@ async function handle(message: Message) {
       if (text) transcript.textContent = text;
       userTranscriptBuffer = "";
       if (text) triggerCharacterAction("acknowledge");
+      if (text) void runQuickBrowserCommand(text).catch((error) => {
+        response.textContent = `浏览器打开失败：${String(error)}`;
+        setMode("degraded");
+      });
     }
   } else if (method === "thread/realtime/itemAdded") {
     const itemType = String(params?.item?.type ?? "");
@@ -580,7 +609,7 @@ async function handle(message: Message) {
     });
     if (!state.manualStop) {
       setMode("ready");
-      response.textContent = "Codex Voice 已结束。再次说“嗨 Jarvis”即可唤醒。";
+      response.textContent = "Codex Voice 已结束。再次说“嘿，杰克”即可唤醒。";
       await armWakeListener();
     }
   } else if (method === "turn/started") {
@@ -651,6 +680,29 @@ function cleanupPeer() {
   remoteAnalyser = null;
 }
 
+function scheduleVoiceReconnect(connection: RTCPeerConnection) {
+  if (!currentWindow || state.manualStop || connection !== peer || voiceStartInFlight) return;
+  if (voiceReconnectTimer !== undefined || voiceReconnectAttempts >= MAX_VOICE_RECONNECTS) {
+    if (voiceReconnectAttempts >= MAX_VOICE_RECONNECTS) {
+      state.directVoice = null;
+      setMode("degraded");
+      response.textContent = "Voice 网络连接不稳定，请点击麦克风重新连接。";
+    }
+    return;
+  }
+  voiceReconnectAttempts += 1;
+  const attempt = voiceReconnectAttempts;
+  const delay = 800 * 2 ** (attempt - 1);
+  response.textContent = `Voice 连接短暂中断，正在自动恢复（${attempt}/${MAX_VOICE_RECONNECTS}）…`;
+  voiceReconnectTimer = window.setTimeout(() => {
+    voiceReconnectTimer = undefined;
+    if (state.manualStop || connection !== peer) return;
+    state.directVoice = null;
+    cleanupPeer();
+    void startDirectVoice();
+  }, delay);
+}
+
 const sleep = (milliseconds: number) =>
   new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 
@@ -695,7 +747,7 @@ async function startDirectVoice({ coldStart = false } = {}) {
   response.textContent = "正在建立 Codex 官方 Voice V3 WebRTC 会话…";
   try {
     const microphoneAuthorization = await invoke<string>("request_microphone_permission");
-    if (microphoneAuthorization !== "authorized") {
+    if (["denied", "restricted", "unavailable"].includes(microphoneAuthorization)) {
       throw new Error("请在系统设置 → 隐私与安全性 → 麦克风中允许 Jarvis Codex。");
     }
     await invoke("disarm_wake_listener");
@@ -724,6 +776,11 @@ async function startDirectVoice({ coldStart = false } = {}) {
       void voiceAudio.play();
     };
     connection.onconnectionstatechange = () => {
+      if (connection.connectionState === "connected") {
+        voiceReconnectAttempts = 0;
+      } else if (connection.connectionState === "failed" || connection.connectionState === "disconnected") {
+        scheduleVoiceReconnect(connection);
+      }
       if (connection.connectionState === "failed") {
         setMode("degraded");
         response.textContent = "Codex Voice WebRTC 连接失败。";
@@ -740,9 +797,12 @@ async function startDirectVoice({ coldStart = false } = {}) {
       threadId: savedThreadId(),
       permissionMode,
       sdp,
+      // Echo is not accepted by the current Codex Voice V3 endpoint.
+      // Cove is supported and keeps the requested calm, technical tone.
       voice: "cove",
     });
     updateVoiceInfo(info);
+    voiceReconnectAttempts = 0;
   } catch (error) {
     cleanupPeer();
     recoverableColdStartError = coldStart && isNotAllowedError(error);
@@ -781,13 +841,13 @@ if (currentWindow) {
         setMode("ready");
       }
       if (state.mode === "ready") {
-        response.textContent = "我在。直接说“嗨 Jarvis”。";
+        response.textContent = "我在。直接说“嘿，杰克”。";
         setWorker("orchestrator", "Wake word armed");
       }
     }
   });
   await listen<WakeEvent>("jarvis-wake", ({ payload }) => {
-    transcript.textContent = "“嗨，Jarvis”";
+    transcript.textContent = "“嘿，杰克”";
     state.manualStop = false;
     if (!payload.ok) {
       setMode("degraded");
@@ -806,12 +866,14 @@ $("#command-form").addEventListener("submit", async (event) => {
   state.manualStop = false;
   transcript.textContent = text;
   input.value = "";
+  if (await runQuickBrowserCommand(text)) return;
   if (!currentWindow) {
     response.textContent = "视觉预览：文字任务已切换为 Codex 工作态。";
     setMode("working");
     return;
   }
   if (state.directVoice?.voiceActive) {
+    if (await runQuickBrowserCommand(text)) return;
     response.textContent = "已将文字作为用户话语注入当前 Codex Voice 会话。";
     await invoke("append_codex_voice_text", { text });
     return;
@@ -945,7 +1007,7 @@ if (currentWindow) {
     const backgroundStart = await invoke<boolean>("startup_is_background");
     if (!backgroundStart) {
       const microphoneAuthorization = await invoke<string>("request_microphone_permission");
-      if (microphoneAuthorization !== "authorized") {
+      if (["denied", "restricted", "unavailable"].includes(microphoneAuthorization)) {
         setMode("degraded");
         banner.hidden = false;
         $("#degraded-copy").textContent =
@@ -955,7 +1017,7 @@ if (currentWindow) {
     await armWakeListener();
     updateVoiceInfo(await invoke<DirectVoice>("direct_voice_status"));
     if (await invoke<boolean>("consume_cold_wake")) {
-      transcript.textContent = "“嗨，Jarvis”";
+      transcript.textContent = "“嘿，杰克”";
     }
   } catch (error) { setMode("stopped"); response.textContent = `启动失败：${String(error)}`; }
 } else {
@@ -965,7 +1027,7 @@ if (currentWindow) {
   ($("#workspace-setting") as HTMLInputElement).value = workspace;
   $("#wake-auth").textContent = "Preview · not connected";
   $("#voice-auth").textContent = "Preview · not connected";
-  transcript.textContent = visualPreviewMode === "stopped" ? "“停下”" : "“嗨，Jarvis”";
+  transcript.textContent = visualPreviewMode === "stopped" ? "“停下”" : "“嘿，杰克”";
   response.textContent = visualPreviewMode === "voice-starting"
     ? "正在从粒子中重构 Jarvis 核心…"
     : visualPreviewMode === "working"
@@ -974,7 +1036,7 @@ if (currentWindow) {
         ? "语音输出正在驱动角色光效与声波。"
         : visualPreviewMode === "stopped"
           ? "所有任务已中断，等待下一次唤醒。"
-          : "Jarvis 视觉系统预览就绪。";
+          : "杰克视觉系统预览就绪。";
   setMode(visualPreviewMode);
   if (["acknowledge", "approval", "complete", "error"].includes(previewActionValue ?? "")) {
     window.setTimeout(() => triggerCharacterAction(previewActionValue as CharacterAction, 1800), 180);
@@ -989,6 +1051,9 @@ async function armWakeListener() {
   try {
     state.wake = await invoke<WakeStatus>("arm_wake_listener");
     $("#wake-auth").textContent = state.wake.ready ? "Local listener ready" : state.wake.authorization;
+    if (state.wake.authorization === "manual-only" && state.mode === "ready") {
+      response.textContent = "Windows 唤醒词模块尚未安装，可点击麦克风启动。";
+    }
     if (["denied", "restricted"].includes(state.wake.authorization)) {
       setMode("degraded");
       banner.hidden = false;
