@@ -4,6 +4,10 @@ import test from "node:test";
 
 const frontend = await readFile(new URL("../src/main.ts", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
+const platformMacos = await readFile(
+  new URL("../src-tauri/src/platform/macos.rs", import.meta.url),
+  "utf8",
+);
 const wakeHelper = await readFile(
   new URL("../src-tauri/wake-helper/JarvisWakeListener.swift", import.meta.url),
   "utf8",
@@ -20,8 +24,17 @@ const helperEntitlements = await readFile(
 test("Voice uses Codex app-server V3 WebRTC directly", () => {
   assert.match(backend, /"version":\s*"v3"/);
   assert.match(backend, /"transport":\s*\{"type":\s*"webrtc"/);
-  assert.match(backend, /"app-server",\s*"--enable",\s*"realtime_conversation",\s*"--stdio"/);
+  assert.match(
+    backend + platformMacos,
+    /"app-server",\s*"--enable",\s*"realtime_conversation"(?!,\s*"--stdio")/,
+  );
   assert.doesNotMatch(frontend, /OPENAI_API_KEY|ChatGPT.*button|hotkey/i);
+});
+
+test("Voice startup avoids replaying the full thread and retries transient WebRTC drops", () => {
+  assert.match(backend, /"includeStartupContext":\s*false/);
+  assert.match(frontend, /scheduleVoiceReconnect/);
+  assert.match(frontend, /MAX_VOICE_RECONNECTS/);
 });
 
 test("wake phrase opens the same direct Voice path", () => {
@@ -55,6 +68,12 @@ test("STOP suppresses transcript-tail handoffs and interrupts late turns", () =>
 test("text input can join the active Voice conversation", () => {
   assert.match(frontend, /append_codex_voice_text/);
   assert.match(backend, /"thread\/realtime\/appendText"/);
+});
+
+test("common Windows browser commands bypass slow model-only routing", () => {
+  assert.match(frontend, /open_browser/);
+  assert.match(backend, /async fn open_browser/);
+  assert.match(backend, /https?:\/\//);
 });
 
 test("production configuration persists workspace and resumes threads", () => {
