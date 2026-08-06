@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", allow(dead_code, unreachable_code, unused_variables))]
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
