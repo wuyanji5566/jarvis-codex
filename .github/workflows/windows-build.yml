@@ -42,6 +42,9 @@ jobs:
       - name: Build web frontend
         run: npm run web:build
 
+      - name: Build Windows wake helper
+        run: npm run wake:build
+
       - name: Check Rust and Clippy
         run: npm run check:rust
 
