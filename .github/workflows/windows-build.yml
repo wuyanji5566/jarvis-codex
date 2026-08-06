@@ -42,11 +42,8 @@ jobs:
       - name: Build web frontend
         run: npm run web:build
 
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
-
-      - name: Run Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Check Rust and Clippy
+        run: npm run check:rust
 
       - name: Build Windows NSIS installer
         run: npm run build:windows

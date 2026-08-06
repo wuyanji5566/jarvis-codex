@@ -13,7 +13,8 @@
     "web:dev": "vite",
     "web:build": "tsc && vite build",
     "test": "node --test",
-    "check": "npm run wake:build && npm test && npm run web:build && cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings"
+    "check:rust": "node scripts/check-rust.mjs",
+    "check": "npm run wake:build && npm test && npm run web:build && npm run check:rust"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1"
