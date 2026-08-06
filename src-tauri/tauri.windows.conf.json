@@ -5,7 +5,7 @@
   },
   "bundle": {
     "targets": ["nsis"],
-    "icon": ["C:/Users/ASUS/jarvis-codex-icons/icon.ico"],
+    "icon": ["icons/icon.ico"],
     "resources": [
       "wake-helper/windows/publish/JarvisWakeListener.exe"
     ],

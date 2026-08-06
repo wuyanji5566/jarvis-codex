@@ -1,6 +1,19 @@
 # Windows 开发与打包
 
-目标环境：Windows 10 22H2 x64、Node.js 20+、Rust stable MSVC、WebView2。
+目标环境：Windows 10 22H2 x64、Node.js 20+、Rust stable MSVC、WebView2、.NET 8 SDK。
+
+首次使用还需要在本机安装并登录官方 Codex CLI。Jarvis 不内置模型密钥，也不会共享开发者的登录状态：
+
+~~~powershell
+codex --version
+codex login
+~~~
+
+如果 `codex` 不在 PATH 中，可以设置自己的可执行文件路径：
+
+~~~powershell
+$env:JARVIS_CODEX_BIN = "C:\\Users\\你的用户名\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe"
+~~~
 
 ## 安装依赖
 
@@ -10,7 +23,7 @@
 npm ci
 ~~~
 
-如果需要构建 Windows 唤醒助手，还需要安装 .NET 8 SDK。没有 .NET 时，项目会安全降级为手动点击麦克风模式，不影响主体运行。
+Visual Studio Build Tools 需要勾选“使用 C++ 的桌面开发”，其中包含 MSVC、Windows SDK 和 MSBuild。没有 .NET 8 SDK 时，项目会安全降级为手动点击麦克风模式，不影响主体运行。
 
 ## 开发
 
