@@ -12,7 +12,7 @@
     "build:windows": "tauri build --config src-tauri/tauri.windows.conf.json --bundles nsis",
     "web:dev": "vite",
     "web:build": "tsc && vite build",
-    "test": "node --test tests/*.test.mjs",
+    "test": "node --test",
     "check": "npm run wake:build && npm test && npm run web:build && cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings"
   },
   "dependencies": {
